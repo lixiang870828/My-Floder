@@ -1,0 +1,359 @@
+
+#import "igGridPhotoViewer.h"
+#import <QuartzCore/QuartzCore.h>
+#import "GenieHomePageController.h"
+#import "DLNACenter.h"
+#import "DLNAServerList.h"
+
+@implementation igGridPhotoViewer
+
+
+- (void)viewDidLoad
+{
+    BOOL iPhone = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone);
+    BOOL iPhone5 =  iPhone && ( [ [ UIScreen mainScreen ] bounds ].size.height >= 568 );
+    
+    //设置小图标的行数
+    _numberOfColumns = 1;
+    
+    _columnSize = iPhone ? 75 : 100;
+    _resizeThumbSize = iPhone ? 20 : 50;
+    
+    //设置小图标最多能显示的行数
+    _maxNumberOfColumns = iPhone && !iPhone5 ? 2 : 3;
+    
+    _portraitColumnCount = iPhone ? 3 : 6;  //设置小图标一行的个数
+    _resizeThumbOffset = iPhone ? 10 : 20;
+    _landscapeSize = iPhone ? (!iPhone5? CGSizeMake(480, 256) : CGSizeMake(568, 256)) : CGSizeMake(1024, 680);
+    _portraitSize = iPhone ? (!iPhone5? CGSizeMake(320, 392): CGSizeMake(320, 480)) : CGSizeMake(768, 935);
+    
+    
+    self.view.frame = CGRectMake(0,0, 320, 480);
+    self.view.backgroundColor = [UIColor colorWithWhite:.1 alpha:1];
+    
+    _thumbsGridView = [[IGGridView alloc]init];
+    _thumbsGridView.rowSeparatorHeight = 0;
+    _thumbsGridView.delegate = self;
+    _thumbsGridView.selectionType = IGGridViewSelectionTypeCell;
+    _thumbsGridView.headerHeight = 0;
+    _thumbsGridView.rowHeight = _columnSize;
+    [self.view addSubview:_thumbsGridView];
+    
+    _photoGridView = [[IGGridView alloc]initWithFrame:self.view.frame style:IGGridViewStyleSingleCellPaging];
+    _photoGridView.delegate = self;
+    _photoGridView.selectionType = IGGridViewSelectionTypeNone;
+    _photoGridView.alwaysBounceVertical = NO;
+    _photoGridView.allowHorizontalBounce = YES;
+    [self.view addSubview:_photoGridView];
+    
+    _photos = [[NSMutableArray alloc]init];
+  
+    //--------------------------------------------------------------------------
+    //--------------------------------------------------------------------------
+    delegate = [[DLNACenter alloc] init];
+    serverList = [[DLNAServerList alloc] init];
+
+    [self loadImage];
+    
+   //---------------------------------------------------------------------------
+   //--------------------------------------------------------------------------- 
+    
+    //隐藏左侧按钮
+    self.navigationItem.hidesBackButton = YES;
+    
+    if(_filters.count > 0)
+        self.navigationItem.rightBarButtonItems = [NSArray arrayWithObjects:self.editButtonItem, nil];
+    
+    IGGridViewImageColumnDefinition* col = [[IGGridViewImageColumnDefinition alloc]initWithKey:@"image" forPropertyType:IGGridViewImageColumnDefinitionPropertyTypeImage];
+    col.enableZooming = YES;
+    
+    _photoDS = [[IGGridViewSingleRowSingleFieldDataSourceHelper alloc]initWithField:col];
+    _photoDS.data = _photos;
+    
+    _photoGridView.dataSource = _photoDS;
+    
+    IGGridViewImageColumnDefinition* thumbCol = [[IGGridViewImageColumnDefinition alloc]initWithKey:@"thumb" forPropertyType:IGGridViewImageColumnDefinitionPropertyTypeImage];
+    _thumbsDS   = [[IGGridViewSingleFieldMultiColumnDataSourceHelper alloc]initWithField:thumbCol];
+    _thumbsDS.numberOfColumns = 1;
+    _thumbsDS.data = _photos;
+    
+    _singleRowThumbDS = [[IGGridViewSingleRowSingleFieldDataSourceHelper alloc]initWithField:thumbCol];
+    _singleRowThumbDS.data = _photos;
+    
+    _thumbsGridView.dataSource = _thumbsDS;
+    
+    [self updateLayoutForOrientation:self.interfaceOrientation usingDuration:0];
+    [super viewDidLoad];
+}
+
+-(void)gridView:(IGGridView *)gridView initializeCell:(IGGridViewCell *)cell
+{
+    cell.selectedColor = [UIColor colorWithWhite:1 alpha:.9];
+}
+
+
+-(void)gridView:(IGGridView *)gridView pageChanged:(IGCellPath *)path
+{
+    if(_thumbsGridView.dataSource == _thumbsDS)
+    {
+        path = [_photoDS normalizePath:path];
+        path = [_thumbsDS deNormalizePath:path];
+    }
+    
+    [_thumbsGridView selectCellAtPath:path animated:NO scrollPosition:IGGridViewScrollPositionNone];
+    [_thumbsGridView scrollToCellAtCellPath:path atScrollPosition:IGGridViewScrollPositionNone animated:YES];
+    [self gridView:_thumbsGridView didSelectCellAtPath:path];
+    
+    [self gridView:_thumbsGridView didSelectRowAtPath:path];
+    
+}
+
+-(void)dealloc
+{
+    [_thumbsGridView release];
+    [_photoGridView release];
+    [_resizeThumb release];
+    [_photoDS release];
+    [serverList release];
+    [delegate release];
+    [_singleRowThumbDS release];
+    [_thumbsDS release];
+    
+    [super dealloc];
+}
+//-------------------------------------------------------------------------------------------
+//-------------------------------------------------------------------------------------------
+//获取图片源
+-(void)getImageSourceList:(deejay::DLNAObjectList *)imagesourceList
+{
+    m_objList = new deejay::DLNAObjectList();
+    m_objList = imagesourceList;
+}
+
+//根据行来确定选取当前图片
+-(void)gridView:(IGGridView *)gridView didSelectRowAtPath:(IGRowPath *)path
+{
+    deejay::DLNAObject& obj = *(m_objList->itemAt(path.rowIndex));
+    [delegate setPlaylist];
+    [delegate openMediaObj:obj.asItem()];
+}
+
+//将url地址转成字符串
+-(void)ChangeImagePath:(const deejay::DLNAItem*) mediaItem
+{
+    NPT_String iconUrl;
+    if (((deejay::DLNAObject*)mediaItem)->findThumbnailURL(200, 200, NULL, iconUrl))
+    {
+        m_path = [NSString stringWithUTF8String:iconUrl.GetChars()];
+    }
+}
+
+//加载图片
+-(void)loadImage
+{
+    for(int i = 0; i < m_objList->count(); i++)
+    {
+        PhotoInfo* photoInfo = [[PhotoInfo alloc]init];
+   
+        deejay::DLNAObject& obj = *(m_objList->itemAt(i));
+        [self ChangeImagePath:obj.asItem()];
+        
+        photoInfo.imagePath = m_path;
+        photoInfo.thumbPath = m_path;
+        [_photos addObject:photoInfo];
+    }
+}
+//------------------------------------------------------------------------------------------------
+//------------------------------------------------------------------------------------------------
+
+-(void)gridView:(IGGridView *)gridView didSelectCellAtPath:(IGCellPath *)path
+{
+    IGGridViewDataSourceHelper* ds = _thumbsGridView.dataSource;
+    
+    if(self.editing)
+    {
+        PhotoInfo* pi = [ds resolveDataObjectForRow:path];
+        
+        path =  [_photoDS deNormalizePath:_editPath];
+        
+        PhotoInfo* pi2 = [_photoDS resolveDataObjectForRow:path];
+        pi2.filter = pi.filter;
+        
+        [_photoGridView updateData];
+        
+    }
+    else
+    {
+        path = [ds normalizePath:path];
+        path =   [_photoDS deNormalizePath:path];
+        
+        [_photoGridView scrollToCellAtCellPath:path atScrollPosition:IGGridViewScrollPositionTopLeft animated:NO];
+    }
+}
+
+- (BOOL)shouldAutorotateToInterfaceOrientation:(UIInterfaceOrientation)interfaceOrientation
+{
+    bool isIphone = ([[UIDevice currentDevice] userInterfaceIdiom] == UIUserInterfaceIdiomPhone);
+    return isIphone? (interfaceOrientation == UIInterfaceOrientationPortrait || interfaceOrientation == UIInterfaceOrientationPortraitUpsideDown) :YES;
+}
+
+-(void)willRotateToInterfaceOrientation:(UIInterfaceOrientation)toInterfaceOrientation duration:(NSTimeInterval)duration
+{
+    [self updateLayoutForOrientation:toInterfaceOrientation usingDuration:duration];
+}
+
+-(void)updateLayoutForOrientation:(UIInterfaceOrientation)interfaceOrientation usingDuration:(NSTimeInterval)duration
+{
+    CGFloat size = _columnSize* _numberOfColumns;
+    
+    if(interfaceOrientation == UIInterfaceOrientationLandscapeLeft || interfaceOrientation == UIInterfaceOrientationLandscapeRight)
+    {
+        [UIView animateWithDuration:duration animations:^{
+            _thumbsGridView.frame  = CGRectMake(0, 0, size, _landscapeSize.height);
+            _resizeThumb.frame = CGRectMake(size,0, _resizeThumbSize, _landscapeSize.height);
+            _photoGridView.frame = CGRectMake(size + _resizeThumbSize, 0, _landscapeSize.width - (size + _resizeThumbSize), _landscapeSize.height);
+        }];
+        
+        
+        
+        NSArray* subViews = [NSArray arrayWithArray:_resizeThumb.subviews];
+        for(UIView* view in subViews)
+            [view removeFromSuperview];
+        
+        CGFloat left = _resizeThumbOffset;
+        for(int i = 0; i < 3; i++)
+        {
+            UIView * block = [[UIView alloc]init];
+            block.backgroundColor = [UIColor grayColor];
+            [_resizeThumb addSubview:block];
+            [block setFrame:CGRectMake(left, _landscapeSize.height/2 - (_resizeThumbOffset/2), 2, _resizeThumbOffset)];
+            left += 5;
+        }
+        
+        [self updateDataForOrientation:YES];
+    }
+    else
+    {
+        [UIView animateWithDuration:duration animations:^{
+            _thumbsGridView.frame  = CGRectMake(0, _portraitSize.height - size, _portraitSize.width, size);
+            _resizeThumb.frame = CGRectMake(0, _portraitSize.height - (size + _resizeThumbSize), _portraitSize.width, _resizeThumbSize);
+            _photoGridView.frame = CGRectMake(0, 0, _portraitSize.width, _portraitSize.height - (size + _resizeThumbSize));
+        }];
+        
+        NSArray* subViews = [NSArray arrayWithArray:_resizeThumb.subviews];
+        for(UIView* view in subViews)
+            [view removeFromSuperview];
+        
+        CGFloat top = _resizeThumbOffset;
+        for(int i = 0; i < 3; i++)
+        {
+            UIView * block2 = [[UIView alloc]init];
+            block2.backgroundColor = [UIColor grayColor];
+            [_resizeThumb addSubview:block2];
+            [block2 setFrame:CGRectMake(_portraitSize.width/2 - (_resizeThumbOffset/2), top, _resizeThumbOffset, 2)];
+            top += 5;
+        }
+        
+        
+        [self updateDataForOrientation:NO];
+        
+    }
+}
+
+-(void)updateDataForOrientation:(BOOL)isLandscape
+{
+    IGCellPath* path = [_thumbsGridView pathForSelectedCell];
+    IGGridViewDataSourceHelper* ds = _thumbsGridView.dataSource;
+    path = [ds normalizePath:path];
+    
+    if(isLandscape)
+    {
+        _thumbsGridView.dataSource = _thumbsDS;
+        _thumbsGridView.columnWidth = [[IGColumnWidth alloc]initWithFillAvailableSpacePercent:1];
+        _thumbsDS.numberOfColumns = _numberOfColumns;
+        [_thumbsDS invalidateData];
+        
+        _thumbsGridView.allowHorizontalBounce = NO;
+        _thumbsGridView.alwaysBounceHorizontal = NO;
+        _thumbsGridView.alwaysBounceVertical = YES;
+    }
+    else
+    {
+        if(_numberOfColumns == 1)
+        {
+            _thumbsGridView.dataSource = _singleRowThumbDS;
+            _thumbsGridView.columnWidth = [[IGColumnWidth alloc]initWithWidth:_portraitSize.width/_portraitColumnCount];
+            _thumbsGridView.allowHorizontalBounce = YES;
+            _thumbsGridView.alwaysBounceHorizontal = YES;
+            _thumbsGridView.alwaysBounceVertical = NO;
+        }
+        else
+        {
+            _thumbsGridView.dataSource = _thumbsDS;
+            _thumbsGridView.columnWidth = [[IGColumnWidth alloc]initWithFillAvailableSpacePercent:1];
+            _thumbsDS.numberOfColumns = _portraitColumnCount;
+            [_thumbsDS invalidateData];
+            
+            _thumbsGridView.allowHorizontalBounce = NO;
+            _thumbsGridView.alwaysBounceHorizontal = NO;
+            _thumbsGridView.alwaysBounceVertical = YES;
+        }
+    }
+    
+    [_thumbsGridView updateData];
+    
+    IGGridViewDataSourceHelper* currentDS = _thumbsGridView.dataSource;
+    path = [currentDS deNormalizePath:path];
+    
+    
+    [_thumbsGridView selectCellAtPath:path animated:NO scrollPosition:IGGridViewScrollPositionNone];
+    [_thumbsGridView scrollToCellAtCellPath:path atScrollPosition:IGGridViewScrollPositionNone animated:NO];
+}
+
+-(void)viewWillAppear:(BOOL)animated
+{
+    [super viewWillAppear:animated];
+   // [_thumbsGridView reloadData];
+    [self updateLayoutForOrientation:self.interfaceOrientation usingDuration:0];
+}
+
+@end
+
+@implementation PhotoInfo
+
+@synthesize imagePath, thumbPath, filter;
+
+-(UIImage *)image
+{
+    if(self.imagePath != nil)
+    {
+        //UIImage* img = [UIImage imageNamed:self.imagePath];
+        UIImage* img = [UIImage imageWithData:[NSData
+                                                 dataWithContentsOfURL:[NSURL URLWithString:self.imagePath]]];
+        return img;
+    }
+    
+    return nil;
+}
+
+-(UIImage *)thumb
+{
+    if(self.thumbPath   != nil)
+    {
+       // UIImage* img = [UIImage imageNamed:self.thumbPath];
+        UIImage* img = [UIImage imageWithData:[NSData
+                                               dataWithContentsOfURL:[NSURL URLWithString:self.thumbPath]]];
+        return img;
+    }
+    
+    return nil;
+}
+
+-(void)dealloc
+{
+    [imagePath release];
+    [thumbPath release];
+    [filter release];
+    [super dealloc];
+}
+@end
